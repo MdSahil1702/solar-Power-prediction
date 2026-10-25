@@ -1,5 +1,3 @@
-"""NASA POWER data analysis. Run: python nasa_analysis.py [csv_path]
-Prints the key tables and saves charts to ./figures. Needs: pandas numpy matplotlib"""
 import os
 import numpy as np
 import pandas as pd
@@ -9,9 +7,9 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 
 CSV = PROJECT_DIR / "dataset" / "nasa_power_india_daily.csv"
-OUTPUT_DIR = PROJECT_DIR / "analysis_results"
 
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
 
 VARS = ["tmax", "tmin", "wind_speed", "solar_radiation"]
 NAME = {"tmax": "Max temp (C)", "tmin": "Min temp (C)", "wind_speed": "Wind (m/s)", "solar_radiation": "Radiation (kWh/m2/day)"}
