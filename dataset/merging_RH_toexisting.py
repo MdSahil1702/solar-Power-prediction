@@ -2,12 +2,17 @@
 import os
 import pandas as pd
 
-# Current script directory = dataset folder
-DATASET_FOLDER = os.path.dirname(
-    os.path.abspath(__file__)
+# ============================================================
+# 1. PROJECT PATHS
+# ============================================================
+
+PROJECT_ROOT = (
+    r"C:\Coding Section\IIITV\Major Projects"
+    r"\Solar Panel Power Generator Prediction"
 )
 
-# Input files
+DATASET_FOLDER = os.path.join(PROJECT_ROOT, "dataset")
+
 OLD_FILE = os.path.join(
     DATASET_FOLDER,
     "nasa_power_india_daily.csv"
@@ -18,182 +23,242 @@ RH_FILE = os.path.join(
     "nasa_power_india_RH2M_daily.csv"
 )
 
-# Output file
 OUTPUT_FILE = os.path.join(
     DATASET_FOLDER,
     "nasa_power_india_combined_daily.csv"
 )
 
 
-# --------------------------------------------------
-# 2. CHECK FILES
-# --------------------------------------------------
+# ============================================================
+# 2. CHECK INPUT FILES
+# ============================================================
 
-for file in [OLD_FILE, RH_FILE]:
+print("Project folder:", PROJECT_ROOT)
+print("Dataset folder:", DATASET_FOLDER)
 
-    if not os.path.exists(file):
-        raise FileNotFoundError(
-            f"File not found: {file}"
-        )
+if not os.path.isfile(OLD_FILE):
+    raise FileNotFoundError(f"Original dataset not found: {OLD_FILE}")
+
+if not os.path.isfile(RH_FILE):
+    raise FileNotFoundError(f"RH2M dataset not found: {RH_FILE}")
 
 
-# --------------------------------------------------
-# 3. READ DATASETS
-# --------------------------------------------------
+# ============================================================
+# 3. LOAD DATASETS
+# ============================================================
 
-print("Reading datasets...")
+print("\nLoading datasets...")
 
-df_old = pd.read_csv(OLD_FILE)
-
+df_original = pd.read_csv(OLD_FILE)
 df_rh = pd.read_csv(RH_FILE)
 
+print("Original dataset shape:", df_original.shape)
+print("RH2M dataset shape:", df_rh.shape)
 
-# --------------------------------------------------
+
+# ============================================================
 # 4. STANDARDIZE COLUMN NAMES
-# --------------------------------------------------
+# ============================================================
 
-df_old.columns = [
-    c.strip().lower() for c in df_old.columns
-]
+df_original.columns = df_original.columns.str.strip().str.lower()
+df_rh.columns = df_rh.columns.str.strip().str.lower()
 
-df_rh.columns = [
-    c.strip().lower() for c in df_rh.columns
-]
+# Support either RH2M or rh2m column name
+if "rh2m" not in df_rh.columns:
+    if "rh2m" in df_rh.columns:
+        pass
+    elif "RH2M" in df_rh.columns:
+        df_rh.rename(columns={"RH2M": "rh2m"}, inplace=True)
+    else:
+        raise ValueError("RH2M column not found in RH dataset.")
 
-
-# --------------------------------------------------
-# 5. CHECK REQUIRED COLUMNS
-# --------------------------------------------------
-
-old_required = [
+# Check required columns
+required_original = [
     "state", "lat", "lon", "date",
-    "tmax", "tmin", "wind_speed",
-    "solar_radiation"
+    "tmax", "tmin", "wind_speed", "solar_radiation"
 ]
 
-rh_required = [
-    "state", "date", "rh2m"
-]
+required_rh = ["state", "date", "rh2m"]
 
-for col in old_required:
+for col in required_original:
+    if col not in df_original.columns:
+        raise ValueError(f"Missing column in original dataset: {col}")
 
-    if col not in df_old.columns:
-        raise ValueError(
-            f"Missing column in original dataset: {col}"
-        )
-
-for col in rh_required:
-
+for col in required_rh:
     if col not in df_rh.columns:
-        raise ValueError(
-            f"Missing column in RH dataset: {col}"
-        )
+        raise ValueError(f"Missing column in RH2M dataset: {col}")
 
 
-# --------------------------------------------------
-# 6. PREPARE COMMON KEYS
-# --------------------------------------------------
+# ============================================================
+# 5. NORMALIZE JOIN KEYS
+# ============================================================
 
-df_old["state"] = df_old["state"].astype(str).str.strip()
+def normalize_state(series):
+    return (
+        series.astype("string")
+        .str.strip()
+        .str.replace(r"\s+", " ", regex=True)
+        .str.casefold()
+    )
 
-df_rh["state"] = df_rh["state"].astype(str).str.strip()
 
-df_old["date"] = pd.to_datetime(
-    df_old["date"], errors="coerce"
+df_original["_state_key"] = normalize_state(df_original["state"])
+df_rh["_state_key"] = normalize_state(df_rh["state"])
+
+
+# ============================================================
+# 5. NORMALIZE JOIN KEYS
+# ============================================================
+
+def normalize_state(series):
+    return (
+        series.astype("string")
+        .str.strip()
+        .str.replace(r"\s+", " ", regex=True)
+        .str.casefold()
+    )
+
+
+df_original["_state_key"] = normalize_state(df_original["state"])
+df_rh["_state_key"] = normalize_state(df_rh["state"])
+
+# Parse dates, supporting mixed date formats
+df_original["_date_key"] = pd.to_datetime(
+    df_original["date"].astype(str).str.strip(),
+    format="mixed",
+    dayfirst=True,
+    errors="coerce"
 ).dt.normalize()
 
-df_rh["date"] = pd.to_datetime(
-    df_rh["date"], errors="coerce"
+df_rh["_date_key"] = pd.to_datetime(
+    df_rh["date"].astype(str).str.strip(),
+    format="mixed",
+    dayfirst=True,
+    errors="coerce"
 ).dt.normalize()
 
+# Identify invalid dates
+invalid_original = df_original["_date_key"].isna()
+invalid_rh = df_rh["_date_key"].isna()
 
-# Remove invalid dates
-df_old = df_old.dropna(subset=["date"])
+if invalid_original.any() or invalid_rh.any():
 
-df_rh = df_rh.dropna(subset=["date"])
+    print("\nInvalid date values detected!")
 
-
-# --------------------------------------------------
-# 7. KEEP REQUIRED RH COLUMNS
-# --------------------------------------------------
-
-df_rh = df_rh[
-    ["state", "date", "rh2m"]
-]
-
-
-# --------------------------------------------------
-# 8. CHECK DUPLICATE KEYS
-# --------------------------------------------------
-
-for name, df in [
-    ("Original dataset", df_old),
-    ("RH2M dataset", df_rh)
-]:
-
-    duplicates = df.duplicated(
-        subset=["state", "date"]
-    ).sum()
-
-    if duplicates > 0:
-
-        raise ValueError(
-            f"{name} contains {duplicates} "
-            "duplicate state-date records."
+    if invalid_original.any():
+        print("\nOriginal dataset invalid dates:")
+        print(
+            df_original.loc[invalid_original, "date"]
+            .head(20)
+            .to_list()
         )
+        print("Total invalid original dates:", invalid_original.sum())
+
+    if invalid_rh.any():
+        print("\nRH2M dataset invalid dates:")
+        print(
+            df_rh.loc[invalid_rh, "date"]
+            .head(20)
+            .to_list()
+        )
+        print("Total invalid RH2M dates:", invalid_rh.sum())
+
+    raise ValueError(
+        "Please inspect the invalid date values printed above."
+    )
+
+print("\nDate normalization successful!")
 
 
-# --------------------------------------------------
-# 9. MERGE DATASETS
-# --------------------------------------------------
+if df_original["_date_key"].isna().any():
+    raise ValueError("Invalid dates found in original dataset.")
+
+if df_rh["_date_key"].isna().any():
+    raise ValueError("Invalid dates found in RH2M dataset.")
+
+
+# ============================================================
+# 6. CHECK DUPLICATE KEYS IN RH2M DATA
+# ============================================================
+
+duplicate_count = df_rh.duplicated(
+    subset=["_state_key", "_date_key"]
+).sum()
+
+if duplicate_count > 0:
+    duplicates = df_rh[
+        df_rh.duplicated(
+            subset=["_state_key", "_date_key"],
+            keep=False
+        )
+    ]
+
+    print("\nDuplicate RH2M keys found:")
+    print(duplicates.head(10))
+
+    raise ValueError(
+        f"RH2M dataset contains {duplicate_count} duplicate state/date keys. "
+        "Resolve these before merging."
+    )
+
+
+# ============================================================
+# 7. MERGE DATASETS
+# ============================================================
 
 print("\nMerging datasets...")
 
-merged_df = pd.merge(
-    df_old,
-    df_rh,
-    on=["state", "date"],
+df_final = pd.merge(
+    df_original,
+    df_rh[["_state_key", "_date_key", "rh2m"]],
+    on=["_state_key", "_date_key"],
     how="left",
-    validate="one_to_one",
+    validate="many_to_one",
     indicator=True
 )
 
 
-# --------------------------------------------------
-# 10. CHECK MATCHING
-# --------------------------------------------------
+# ============================================================
+# 8. CHECK MERGE RESULTS
+# ============================================================
 
-matched = (merged_df["_merge"] == "both").sum()
+matched = (df_final["_merge"] == "both").sum()
+unmatched = (df_final["_merge"] == "left_only").sum()
 
-unmatched = (merged_df["_merge"] == "left_only").sum()
+print("\n========== MERGE REPORT ==========")
+print("Original rows:", len(df_original))
+print("RH2M rows:", len(df_rh))
+print("Final rows:", len(df_final))
+print("Matched rows:", matched)
+print("Unmatched rows:", unmatched)
 
-print("\nMerge results:")
-print("Matched records:", matched)
-print("Unmatched records:", unmatched)
+if len(df_final) != len(df_original):
+    raise ValueError(
+        "Row count changed unexpectedly. Check the merge keys."
+    )
 
 if unmatched > 0:
-
-    print("\nWARNING: Some original records have no RH2M match.")
+    print("\nWARNING: Some rows did not find matching RH2M values.")
+    print("Sample unmatched records:")
 
     print(
-        merged_df.loc[
-            merged_df["_merge"] == "left_only",
+        df_final.loc[
+            df_final["_merge"] == "left_only",
             ["state", "date"]
-        ].head(10)
+        ].head(15)
     )
 
 
-# Remove merge indicator
-merged_df.drop(
-    columns=["_merge"],
+# ============================================================
+# 9. CLEAN FINAL DATASET
+# ============================================================
+
+df_final.drop(
+    columns=["_state_key", "_date_key", "_merge"],
     inplace=True
 )
 
-
-# --------------------------------------------------
-# 11. FINAL COLUMN ORDER
-# --------------------------------------------------
-
+# Arrange columns in the required order
 final_columns = [
     "state",
     "lat",
@@ -206,56 +271,26 @@ final_columns = [
     "rh2m"
 ]
 
-merged_df = merged_df[final_columns]
+df_final = df_final[final_columns]
 
 
-# --------------------------------------------------
-# 12. SAVE FINAL DATASET
-# --------------------------------------------------
+# ============================================================
+# 10. SAVE FINAL DATASET
+# ============================================================
 
-merged_df = merged_df.sort_values(
-    ["state", "date"]
-).reset_index(drop=True)
+df_final.to_csv(OUTPUT_FILE, index=False)
 
-merged_df.to_csv(
-    OUTPUT_FILE,
-    index=False
-)
-
-
-# --------------------------------------------------
-# 13. FINAL REPORT
-# --------------------------------------------------
-
-print("\n========== MERGE COMPLETED ==========")
-
+print("\n========== FINAL DATASET ==========")
+print("Saved successfully!")
 print("Output file:", OUTPUT_FILE)
-
-print("Total rows:", len(merged_df))
-
-print("Total columns:", len(merged_df.columns))
-
-print("States/UTs:", merged_df["state"].nunique())
-
-print(
-    "Date range:",
-    merged_df["date"].min().date(),
-    "to",
-    merged_df["date"].max().date()
-)
-
-print("\nFinal columns:")
-
-print(merged_df.columns.tolist())
+print("Final shape:", df_final.shape)
+print("\nColumns:")
+print(df_final.columns.tolist())
 
 print("\nMissing values:")
+print(df_final.isnull().sum())
 
-print(merged_df.isna().sum().to_string())
+print("\nFirst five rows:")
+print(df_final.head())
 
-print("\nRows per state:")
-
-print(
-    merged_df.groupby("state").size().to_string()
-)
-
-print("\n=====================================")
+print("\nMerge process completed successfully!")
